@@ -4,16 +4,26 @@ import logging
 from copy import deepcopy
 from typing import Optional, List, Dict, Any
 from ii_agent.llm.base import LLMClient
-from ii_agent.tools.advanced_tools.image_search_tool import ImageSearchTool
+from ii_agent.llm.context_manager.llm_summarizing import LLMSummarizingContextManager
+from ii_agent.llm.token_counter import TokenCounter
+from ii_agent.tools.image_search_tool import ImageSearchTool
 from ii_agent.tools.base import LLMTool
 from ii_agent.llm.message_history import ToolCallParameters
-from ii_agent.tools.presentation_tool import PresentationTool
+from ii_agent.tools.memory.compactify_memory import CompactifyMemoryTool
+from ii_agent.tools.memory.simple_memory import SimpleMemoryTool
+from ii_agent.tools.slide_deck_tool import SlideDeckInitTool, SlideDeckCompleteTool
 from ii_agent.tools.web_search_tool import WebSearchTool
 from ii_agent.tools.visit_webpage_tool import VisitWebpageTool
 from ii_agent.tools.str_replace_tool_relative import StrReplaceEditorTool
 from ii_agent.tools.static_deploy_tool import StaticDeployTool
 from ii_agent.tools.sequential_thinking_tool import SequentialThinkingTool
-from ii_agent.tools.complete_tool import CompleteTool
+from ii_agent.tools.message_tool import MessageTool
+from ii_agent.tools.complete_tool import (
+    CompleteTool, 
+    ReturnControlToUserTool, 
+    CompleteToolReviewer, 
+    ReturnControlToGeneralAgentTool
+)
 from ii_agent.tools.bash_tool import create_bash_tool, create_docker_bash_tool
 from ii_agent.browser.browser import Browser
 from ii_agent.utils import WorkspaceManager
@@ -33,24 +43,32 @@ from ii_agent.tools.browser_tools import (
     BrowserGetSelectOptionsTool,
     BrowserSelectDropdownOptionTool,
 )
-
-from ii_agent.tools.advanced_tools.audio_tool import (
+from ii_agent.tools.visualizer import DisplayImageTool
+from ii_agent.tools.audio_tool import (
     AudioTranscribeTool,
     AudioGenerateTool,
 )
-from ii_agent.tools.advanced_tools.video_gen_tool import VideoGenerateFromTextTool
-from ii_agent.tools.advanced_tools.image_gen_tool import ImageGenerateTool
-from ii_agent.tools.advanced_tools.pdf_tool import PdfTextExtractTool
+from ii_agent.tools.video_gen_tool import (
+    VideoGenerateFromTextTool,
+    VideoGenerateFromImageTool,
+    LongVideoGenerateFromTextTool,
+    LongVideoGenerateFromImageTool,
+)
+from ii_agent.tools.image_gen_tool import ImageGenerateTool
+from ii_agent.tools.speech_gen_tool import SingleSpeakerSpeechGenerationTool
+from ii_agent.tools.pdf_tool import PdfTextExtractTool
 from ii_agent.tools.deep_research_tool import DeepResearchTool
 from ii_agent.tools.list_html_links_tool import ListHtmlLinksTool
+from ii_agent.utils.constants import TOKEN_BUDGET
+from ii_agent.core.storage.models.settings import Settings
 
 
 def get_system_tools(
     client: LLMClient,
     workspace_manager: WorkspaceManager,
     message_queue: asyncio.Queue,
+    settings: Settings,
     container_id: Optional[str] = None,
-    ask_user_permission: bool = False,
     tool_args: Dict[str, Any] = None,
 ) -> list[LLMTool]:
     """
@@ -59,6 +77,7 @@ def get_system_tools(
     Returns:
         list[LLMTool]: A list of all system tools.
     """
+    ask_user_permission = False # Not support
     if container_id is not None:
         bash_tool = create_docker_bash_tool(
             container=container_id, ask_user_permission=ask_user_permission
@@ -68,51 +87,82 @@ def get_system_tools(
             ask_user_permission=ask_user_permission, cwd=workspace_manager.root
         )
 
+    logger = logging.getLogger("presentation_context_manager")
+    context_manager = LLMSummarizingContextManager(
+        client=client,
+        token_counter=TokenCounter(),
+        logger=logger,
+        token_budget=TOKEN_BUDGET,
+    )
+
     tools = [
-        SequentialThinkingTool(),
-        WebSearchTool(),
-        VisitWebpageTool(),
+        MessageTool(),
+        WebSearchTool(settings=settings),
+        VisitWebpageTool(settings=settings),
         StaticDeployTool(workspace_manager=workspace_manager),
         StrReplaceEditorTool(
             workspace_manager=workspace_manager, message_queue=message_queue
         ),
         bash_tool,
         ListHtmlLinksTool(workspace_manager=workspace_manager),
-        PresentationTool(
-            client=client,
+        SlideDeckInitTool(
             workspace_manager=workspace_manager,
-            message_queue=message_queue,
         ),
+        SlideDeckCompleteTool(
+            workspace_manager=workspace_manager,
+        ),
+        DisplayImageTool(workspace_manager=workspace_manager),
     ]
-    image_search_tool = ImageSearchTool()
+    image_search_tool = ImageSearchTool(settings=settings)
     if image_search_tool.is_available():
         tools.append(image_search_tool)
 
     # Conditionally add tools based on tool_args
     if tool_args:
+        if tool_args.get("sequential_thinking", False):
+            tools.append(SequentialThinkingTool())
         if tool_args.get("deep_research", False):
             tools.append(DeepResearchTool())
         if tool_args.get("pdf", False):
             tools.append(PdfTextExtractTool(workspace_manager=workspace_manager))
-        if tool_args.get("media_generation", False) and (
-            os.environ.get("GOOGLE_CLOUD_PROJECT")
-            and os.environ.get("GOOGLE_CLOUD_REGION")
-        ):
-            tools.extend(
-                [
-                    ImageGenerateTool(workspace_manager=workspace_manager),
-                    VideoGenerateFromTextTool(workspace_manager=workspace_manager),
-                ]
-            )
-        if tool_args.get("audio_generation", False) and (
-            os.environ.get("OPEN_API_KEY") and os.environ.get("AZURE_OPENAI_ENDPOINT")
-        ):
-            tools.extend(
-                [
-                    AudioTranscribeTool(workspace_manager=workspace_manager),
-                    AudioGenerateTool(workspace_manager=workspace_manager),
-                ]
-            )
+        if tool_args.get("media_generation", False):
+            # Check if media config is available in settings
+            has_media_config = False
+            if settings and settings.media_config:
+                if (settings.media_config.gcp_project_id and settings.media_config.gcp_location) or (settings.media_config.google_ai_studio_api_key):
+                    has_media_config = True
+                
+            if has_media_config:
+                tools.append(ImageGenerateTool(workspace_manager=workspace_manager, settings=settings))
+                if tool_args.get("video_generation", True):
+                    tools.extend([
+                        VideoGenerateFromTextTool(workspace_manager=workspace_manager, settings=settings), 
+                        VideoGenerateFromImageTool(workspace_manager=workspace_manager, settings=settings),
+                        LongVideoGenerateFromTextTool(workspace_manager=workspace_manager, settings=settings),
+                        LongVideoGenerateFromImageTool(workspace_manager=workspace_manager, settings=settings)
+                    ])
+                if settings.media_config.google_ai_studio_api_key:
+                    tools.append(SingleSpeakerSpeechGenerationTool(workspace_manager=workspace_manager, settings=settings))
+            else:
+                logger.warning("Media generation tools not added due to missing configuration")
+                raise Exception("Media generation tools not added due to missing configuration")
+        if tool_args.get("audio_generation", False):
+            # Check if audio config is available in settings
+            has_audio_config = False
+            if settings and settings.audio_config:
+                if (settings.audio_config.openai_api_key and 
+                    settings.audio_config.azure_endpoint):
+                    has_audio_config = True
+                
+            if has_audio_config:
+                tools.extend(
+                    [
+                        AudioTranscribeTool(workspace_manager=workspace_manager, settings=settings),
+                        AudioGenerateTool(workspace_manager=workspace_manager, settings=settings),
+                    ]
+                )
+            
+        # Browser tools
         if tool_args.get("browser", False):
             browser = Browser()
             tools.extend(
@@ -132,7 +182,14 @@ def get_system_tools(
                     BrowserSelectDropdownOptionTool(browser=browser),
                 ]
             )
-        # Browser tools
+
+        memory_tool = tool_args.get("memory_tool")
+        if memory_tool == "compactify-memory":
+            tools.append(CompactifyMemoryTool(context_manager=context_manager))
+        elif memory_tool == "none":
+            pass
+        elif memory_tool == "simple":
+            tools.append(SimpleMemoryTool())
 
     return tools
 
@@ -151,9 +208,12 @@ class AgentToolManager:
     search capabilities, and task completion functionality.
     """
 
-    def __init__(self, tools: List[LLMTool], logger_for_agent_logs: logging.Logger):
+    def __init__(self, tools: List[LLMTool], logger_for_agent_logs: logging.Logger, interactive_mode: bool = True, reviewer_mode: bool = False):
         self.logger_for_agent_logs = logger_for_agent_logs
-        self.complete_tool = CompleteTool()
+        if reviewer_mode:
+            self.complete_tool = ReturnControlToGeneralAgentTool() if interactive_mode else CompleteToolReviewer()
+        else:
+            self.complete_tool = ReturnControlToUserTool() if interactive_mode else CompleteTool()
         self.tools = tools
 
     def get_tool(self, tool_name: str) -> LLMTool:
@@ -175,12 +235,12 @@ class AgentToolManager:
         except StopIteration:
             raise ValueError(f"Tool with name {tool_name} not found")
 
-    def run_tool(self, tool_params: ToolCallParameters, history: MessageHistory):
+    async def run_tool(self, tool_params: ToolCallParameters, history: MessageHistory):
         """
-        Executes a llm tool.
+        Executes a llm tool asynchronously.
 
         Args:
-            tool (LLMTool): The tool to execute.
+            tool_params (ToolCallParameters): The tool parameters.
             history (MessageHistory): The history of the conversation.
         Returns:
             ToolResult: The result of the tool execution.
@@ -190,7 +250,7 @@ class AgentToolManager:
         tool_input = tool_params.tool_input
         self.logger_for_agent_logs.info(f"Running tool: {tool_name}")
         self.logger_for_agent_logs.info(f"Tool input: {tool_input}")
-        result = llm_tool.run(tool_input, deepcopy(history))
+        result = await llm_tool.run_async(tool_input, history)
 
         tool_input_str = "\n".join([f" - {k}: {v}" for k, v in tool_input.items()])
 

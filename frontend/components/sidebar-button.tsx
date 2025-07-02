@@ -11,9 +11,9 @@ import { useSearchParams } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { Orbitron } from "next/font/google";
+import { Kumbh_Sans } from "next/font/google";
 
-const orbitron = Orbitron({
+const kumbh_sans = Kumbh_Sans({
   subsets: ["latin"],
 });
 
@@ -61,8 +61,7 @@ const SidebarButton = ({ className, workspaceInfo }: SidebarButtonProps) => {
 
       const data = await response.json();
       setSessions(data.sessions || []);
-    } catch (err) {
-      console.error("Failed to fetch sessions:", err);
+    } catch {
       setError("Failed to load sessions. Please try again.");
     } finally {
       setIsLoading(false);
@@ -117,7 +116,7 @@ const SidebarButton = ({ className, workspaceInfo }: SidebarButtonProps) => {
               animate={{ x: 0 }}
               exit={{ x: "-100%" }}
               transition={{ type: "spring", damping: 25, stiffness: 300 }}
-              className="fixed left-0 top-0 h-full w-[300px] bg-[#1e1f23] border-r border-[#3A3B3F] z-100 overflow-auto"
+              className="fixed left-0 top-0 h-full w-[300px] bg-[#1e1f23] border-[#3A3B3F] z-100 overflow-auto"
             >
               <div className="p-4 border-b border-[#3A3B3F] flex items-center gap-3">
                 <div
@@ -135,7 +134,7 @@ const SidebarButton = ({ className, workspaceInfo }: SidebarButtonProps) => {
                     className="rounded-sm"
                   />
                   <span
-                    className={`text-white text-lg font-serif ${orbitron.className}`}
+                    className={`text-white text-lg font-semibold font-serif ${kumbh_sans.className}`}
                   >
                     II-Agent
                   </span>
@@ -168,7 +167,7 @@ const SidebarButton = ({ className, workspaceInfo }: SidebarButtonProps) => {
                         )}
                       >
                         <div className="text-white text-sm font-medium truncate">
-                          {session.first_message}
+                          {session.name}
                         </div>
                         <div className="text-gray-400 text-xs flex items-center gap-1 mt-1">
                           <Clock className="h-3 w-3" />

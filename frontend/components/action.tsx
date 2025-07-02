@@ -13,6 +13,7 @@ import {
   Lightbulb,
   LoaderCircle,
   MousePointerClick,
+  SearchCheck,
   Rocket,
   RotateCcw,
   Search,
@@ -43,6 +44,7 @@ const Action = ({ workspaceInfo, type, value, onClick }: ActionProps) => {
     const className = "h-4 w-4 text-neutral-100 flex-shrink-0 mt-[2px]";
     switch (type) {
       case TOOL.SEQUENTIAL_THINKING:
+      case TOOL.MESSAGE_USER:
         return <Lightbulb className={className} />;
       case TOOL.WEB_SEARCH:
         return <Search className={className} />;
@@ -64,6 +66,9 @@ const Action = ({ workspaceInfo, type, value, onClick }: ActionProps) => {
       case TOOL.GENERATE_AUDIO_RESPONSE:
         return <AudioLines className={className} />;
       case TOOL.VIDEO_GENERATE:
+      case TOOL.VIDEO_GENERATE_FROM_IMAGE:
+      case TOOL.LONG_VIDEO_GENERATE:
+      case TOOL.LONG_VIDEO_GENERATE_FROM_IMAGE:
         return <Video className={className} />;
       case TOOL.IMAGE_GENERATE:
         return <ImageIcon className={className} />;
@@ -71,6 +76,8 @@ const Action = ({ workspaceInfo, type, value, onClick }: ActionProps) => {
         return <Sparkle className={className} />;
       case TOOL.PRESENTATION:
         return <Presentation className={className} />;
+      case TOOL.REVIEWER_AGENT:
+        return <SearchCheck className={className} />;
 
       case TOOL.BROWSER_WAIT:
         return <LoaderCircle className={className} />;
@@ -98,6 +105,8 @@ const Action = ({ workspaceInfo, type, value, onClick }: ActionProps) => {
         return <Globe className={className} />;
       case TOOL.BROWSER_OPEN_NEW_TAB:
         return <Globe className={className} />;
+      case TOOL.BROWSER_VIEW_INTERACTIVE_ELEMENTS:
+        return <MousePointerClick className={className} />;
 
       default:
         return <></>;
@@ -107,6 +116,7 @@ const Action = ({ workspaceInfo, type, value, onClick }: ActionProps) => {
   const step_title = useMemo(() => {
     switch (type) {
       case TOOL.SEQUENTIAL_THINKING:
+      case TOOL.MESSAGE_USER:
         return "Thinking";
       case TOOL.WEB_SEARCH:
         return "Searching";
@@ -133,12 +143,20 @@ const Action = ({ workspaceInfo, type, value, onClick }: ActionProps) => {
         return "Generating Audio";
       case TOOL.VIDEO_GENERATE:
         return "Generating Video";
+      case TOOL.VIDEO_GENERATE_FROM_IMAGE:
+        return "Generating Video from Image";
+      case TOOL.LONG_VIDEO_GENERATE:
+        return "Generating Long Video from Text";
+      case TOOL.LONG_VIDEO_GENERATE_FROM_IMAGE:
+        return "Generating Long Video from Image";
       case TOOL.IMAGE_GENERATE:
         return "Generating Image";
       case TOOL.DEEP_RESEARCH:
         return "Deep Researching";
       case TOOL.PRESENTATION:
         return "Using presentation agent";
+      case TOOL.REVIEWER_AGENT:
+        return "Reviewer agent";
 
       case TOOL.BROWSER_WAIT:
         return "Waiting for Page to Load";
@@ -166,6 +184,8 @@ const Action = ({ workspaceInfo, type, value, onClick }: ActionProps) => {
         return "Switching Tab";
       case TOOL.BROWSER_OPEN_NEW_TAB:
         return "Opening New Tab";
+      case TOOL.BROWSER_VIEW_INTERACTIVE_ELEMENTS:
+        return "Viewing Interactive Elements";
 
       default:
         return type;
@@ -175,6 +195,7 @@ const Action = ({ workspaceInfo, type, value, onClick }: ActionProps) => {
   const step_value = useMemo(() => {
     switch (type) {
       case TOOL.SEQUENTIAL_THINKING:
+      case TOOL.MESSAGE_USER:
         return value.tool_input?.thought;
       case TOOL.WEB_SEARCH:
         return value.tool_input?.query;
@@ -206,8 +227,10 @@ const Action = ({ workspaceInfo, type, value, onClick }: ActionProps) => {
         return value.tool_input?.output_filename === workspaceInfo
           ? workspaceInfo
           : value.tool_input?.output_filename?.replace(workspaceInfo, "");
-
       case TOOL.VIDEO_GENERATE:
+      case TOOL.VIDEO_GENERATE_FROM_IMAGE:
+      case TOOL.LONG_VIDEO_GENERATE:
+      case TOOL.LONG_VIDEO_GENERATE_FROM_IMAGE:
         return value.tool_input?.output_filename === workspaceInfo
           ? workspaceInfo
           : value.tool_input?.output_filename?.replace(workspaceInfo, "");
@@ -219,6 +242,8 @@ const Action = ({ workspaceInfo, type, value, onClick }: ActionProps) => {
         return value.tool_input?.query;
       case TOOL.PRESENTATION:
         return value.tool_input?.action + ": " + value.tool_input?.description;
+      case TOOL.REVIEWER_AGENT:
+        return value.content;
 
       case TOOL.BROWSER_WAIT:
         return value.tool_input?.url;
@@ -246,6 +271,8 @@ const Action = ({ workspaceInfo, type, value, onClick }: ActionProps) => {
         return value.tool_input?.url;
       case TOOL.BROWSER_OPEN_NEW_TAB:
         return value.tool_input?.url;
+      case TOOL.BROWSER_VIEW_INTERACTIVE_ELEMENTS:
+        return value.tool_input?.url;
 
       default:
         break;
@@ -253,9 +280,14 @@ const Action = ({ workspaceInfo, type, value, onClick }: ActionProps) => {
   }, [type, value, workspaceInfo]);
 
   if (
+    !type ||
     type === TOOL.COMPLETE ||
     type === TOOL.BROWSER_VIEW ||
-    type === TOOL.LIST_HTML_LINKS
+    type === TOOL.LIST_HTML_LINKS ||
+    type === TOOL.RETURN_CONTROL_TO_USER ||
+    type === TOOL.SLIDE_DECK_INIT ||
+    type === TOOL.SLIDE_DECK_COMPLETE ||
+    type === TOOL.DISPLAY_IMAGE
   )
     return null;
 

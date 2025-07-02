@@ -1,6 +1,7 @@
 import asyncio
 from ii_agent.core.event import EventType, RealtimeEvent
-from ii_agent.tools.advanced_tools.image_search_tool import ImageSearchTool
+from ii_agent.llm.context_manager.base import ContextManager
+from ii_agent.tools.image_search_tool import ImageSearchTool
 from ii_agent.tools.base import LLMTool
 from ii_agent.utils import WorkspaceManager
 from ii_agent.tools.bash_tool import create_bash_tool
@@ -174,6 +175,7 @@ action = init
         client,
         workspace_manager: WorkspaceManager,
         message_queue: asyncio.Queue,
+        context_manager: ContextManager,
         ask_user_permission: bool = False,
     ):
         super().__init__()
@@ -188,11 +190,11 @@ action = init
         image_search_tool = ImageSearchTool()
         if image_search_tool.is_available():
             self.tools.append(image_search_tool)
-        self.history = MessageHistory()
+        self.history = MessageHistory(context_manager=context_manager)
         self.tool_params = [tool.get_tool_param() for tool in self.tools]
         self.max_turns = 200
 
-    def run_impl(
+    async def run_impl(
         self,
         tool_input: dict[str, Any],
         message_history: Optional[MessageHistory] = None,
@@ -204,7 +206,7 @@ action = init
             self.history = MessageHistory()
 
             # Clone the reveal.js repository to the specified path
-            clone_result = self.bash_tool.run_impl(
+            clone_result = await self.bash_tool.run_impl(
                 {
                     "command": f"git clone https://github.com/khoangothe/reveal.js.git {self.workspace_manager.root}/presentation/reveal.js"
                 }
@@ -218,7 +220,7 @@ action = init
                 )
 
             # Install dependencies
-            install_result = self.bash_tool.run_impl(
+            install_result = await self.bash_tool.run_impl(
                 {
                     "command": f"cd {self.workspace_manager.root}/presentation/reveal.js && npm install && cd {self.workspace_manager.root}"
                 }
@@ -239,6 +241,7 @@ action = init
 
         remaining_turns = self.max_turns
         while remaining_turns > 0:
+            self.history.truncate()
             remaining_turns -= 1
 
             delimiter = "-" * 45 + "PRESENTATION AGENT" + "-" * 45

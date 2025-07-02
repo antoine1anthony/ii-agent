@@ -4,6 +4,7 @@ from ii_agent.tools.base import (
     ToolImplOutput,
 )
 from ii_agent.tools.web_search_client import create_search_client
+from ii_agent.core.storage.models.settings import Settings
 from typing import Any, Optional
 
 
@@ -19,18 +20,18 @@ class WebSearchTool(LLMTool):
     }
     output_type = "string"
 
-    def __init__(self, max_results=5, **kwargs):
+    def __init__(self, settings: Optional[Settings] = None, max_results=5, **kwargs):
         self.max_results = max_results
-        self.web_search_client = create_search_client(max_results=max_results, **kwargs)
+        self.web_search_client = create_search_client(settings=settings, max_results=max_results, **kwargs)
 
-    def run_impl(
+    async def run_impl(
         self,
         tool_input: dict[str, Any],
         message_history: Optional[MessageHistory] = None,
     ) -> ToolImplOutput:
         query = tool_input["query"]
         try:
-            output = self.web_search_client.forward(query)
+            output = await self.web_search_client.forward_async(query)
             return ToolImplOutput(
                 output,
                 f"Search Results with query: {query} successfully retrieved using {self.web_search_client.name}",

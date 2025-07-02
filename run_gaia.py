@@ -22,8 +22,9 @@ from huggingface_hub import snapshot_download
 import uuid
 import asyncio
 from ii_agent.db.models import Session, Event
-from ii_agent.agents.anthropic_fc import AnthropicFC
+from ii_agent.agents.function_call import FunctionCallAgent
 from ii_agent.browser.browser import Browser
+from ii_agent.llm.message_history import MessageHistory
 from ii_agent.prompts.gaia_system_prompt import GAIA_SYSTEM_PROMPT
 from ii_agent.tools.bash_tool import BashTool
 from ii_agent.tools.browser_tools import (
@@ -39,7 +40,7 @@ from ii_agent.tools.browser_tools import (
     BrowserViewTool,
     BrowserWaitTool,
 )
-from ii_agent.tools.advanced_tools.gemini import (
+from ii_agent.tools.gemini import (
     AudioUnderstandingTool,
     AudioTranscribeTool,
     YoutubeVideoUnderstandingTool,
@@ -52,11 +53,10 @@ from ii_agent.tools.visualizer import DisplayImageTool
 from ii_agent.tools.web_search_tool import WebSearchTool
 from ii_agent.utils import WorkspaceManager
 from ii_agent.llm import get_client
-from ii_agent.llm.context_manager.standard import StandardContextManager
+from ii_agent.llm.context_manager.llm_summarizing import LLMSummarizingContextManager
 from ii_agent.llm.token_counter import TokenCounter
-from ii_agent.utils.constants import DEFAULT_MODEL, UPLOAD_FOLDER_NAME
-from utils import parse_common_args
-from ii_agent.db.manager import DatabaseManager
+from ii_agent.utils.constants import DEFAULT_MODEL, TOKEN_BUDGET, UPLOAD_FOLDER_NAME
+from ii_agent.db.manager import Sessions, get_db
 from ii_agent.core.event import RealtimeEvent, EventType
 from ii_agent.tools.youtube_transcript_tool import YoutubeTranscriptTool
 
@@ -67,7 +67,36 @@ append_answer_lock = Lock()
 def parse_args():
     """Parse command line arguments for GAIA evaluation."""
     parser = argparse.ArgumentParser(description="Run GAIA dataset evaluation")
-    parser = parse_common_args(parser)
+    parser.add_argument(
+        "--logs-path",
+        type=str,
+        default="agent_logs.txt",
+        help="Path to save logs",
+    ) 
+    parser.add_argument(
+        "--use-container-workspace",
+        type=str,
+        default=None,
+        help="(Optional) Path to the container workspace to run commands in.",
+    )
+    parser.add_argument(
+        "--minimize-stdout-logs",
+        help="Minimize the amount of logs printed to stdout.",
+        action="store_true",
+        default=False,
+    )
+    parser.add_argument(
+        "--project-id",
+        type=str,
+        default=None,
+        help="Project ID to use for Anthropic",
+    )
+    parser.add_argument(
+        "--region",
+        type=str,
+        default=None,
+        help="Region to use for Anthropic",
+    )
 
     # GAIA-specific arguments
     parser.add_argument(
@@ -193,17 +222,14 @@ async def answer_single_question(
     workspace_path.mkdir(parents=True, exist_ok=True)
     logger.info(f"Created workspace directory for task {task_id}: {workspace_path}")
 
-    # Initialize database manager
-    db_manager = DatabaseManager()
-
     # Create a new session with the task_id as session_id
     session_id = uuid.UUID(task_id)
 
     # Check if session exists and handle accordingly
-    existing_session = db_manager.get_session_by_id(session_id)
+    existing_session = Sessions.get_session_by_id(session_id)
     if existing_session:
         logger.info(f"Found existing session {session_id}, removing old events...")
-        with db_manager.get_session() as session:
+        with get_db() as session:
             # Delete all events for this session
             session.query(Event).filter(Event.session_id == str(session_id)).delete()
             # Delete the session itself
@@ -222,7 +248,7 @@ async def answer_single_question(
                 )
 
     try:
-        db_manager.create_session(
+        Sessions.create_session(
             session_uuid=session_id,
             workspace_path=workspace_path,
             device_id="gaia-eval",
@@ -299,19 +325,21 @@ async def answer_single_question(
     ]
 
     system_prompt = GAIA_SYSTEM_PROMPT
+    init_history = MessageHistory(context_manager)
 
     # Create agent instance for this question
-    agent = AnthropicFC(
+    agent = FunctionCallAgent(
         system_prompt=system_prompt,
         client=client,
         tools=tools,
         workspace_manager=workspace_manager,
         message_queue=message_queue,
         logger_for_agent_logs=logger,
-        context_manager=context_manager,
+        init_history=init_history,
         max_output_tokens_per_turn=32768,
         max_turns=200,
         session_id=session_id,  # Pass the session_id from database manager
+        interactive_mode=False,  # Run until the task is completed
     )
 
     # Create background task for message processing
@@ -334,14 +362,10 @@ Run verification steps if that's needed, you must make sure you find the correct
         )
 
         # Run agent with question-specific workspace
-        loop = asyncio.get_running_loop()
-        final_result = await loop.run_in_executor(
-            None,  # Uses default ThreadPoolExecutor
-            lambda: agent.run_agent(
-                augmented_question,
-                resume=True,
-                files=[example["file_name"]] if example["file_name"] else [],
-            ),
+        final_result = await agent.run_agent_async(
+            augmented_question,
+            resume=True,
+            files=[example["file_name"]] if example["file_name"] else [],
         )
 
         output = str(final_result)
@@ -415,15 +439,16 @@ def main():
         use_caching=False,
         project_id=args.project_id,
         region=args.region,
-        thinking_tokens=2048,
+        thinking_tokens=0,
     )
 
     # Initialize token counter and context manager
     token_counter = TokenCounter()
-    context_manager = StandardContextManager(
+    context_manager = LLMSummarizingContextManager(
+        client=client,
         token_counter=token_counter,
         logger=logger,
-        token_budget=120_000,
+        token_budget=TOKEN_BUDGET,
     )
 
     # Load dataset and get tasks to run

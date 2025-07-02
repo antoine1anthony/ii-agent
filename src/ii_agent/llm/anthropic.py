@@ -39,6 +39,7 @@ from anthropic.types.message_create_params import (
 )
 
 
+from ii_agent.core.config.llm_config import LLMConfig
 from ii_agent.llm.base import (
     LLMClient,
     AssistantContentBlock,
@@ -48,47 +49,41 @@ from ii_agent.llm.base import (
     TextResult,
     LLMMessages,
     ToolFormattedResult,
+    UserContentBlock,
     recursively_remove_invoke_tag,
     ImageBlock,
 )
-from ii_agent.utils.constants import DEFAULT_MODEL
 
 
 class AnthropicDirectClient(LLMClient):
     """Use Anthropic models via first party API."""
-
-    def __init__(
-        self,
-        model_name=DEFAULT_MODEL,
-        max_retries=2,
-        use_caching=True,
-        use_low_qos_server: bool = False,
-        thinking_tokens: int = 0,
-        project_id: None | str = None,
-        region: None | str = None,
-    ):
+ 
+    def __init__(self, llm_config: LLMConfig):
         """Initialize the Anthropic first party client."""
         # Disable retries since we are handling retries ourselves.
-        if (project_id is not None) and (region is not None):
+        self.model_name = llm_config.model
+        if (llm_config.vertex_project_id is not None) and (llm_config.vertex_region is not None):
             self.client = anthropic.AnthropicVertex(
-                project_id=project_id,
-                region=region,
+                project_id=llm_config.vertex_project_id,
+                region=llm_config.vertex_region,
                 timeout=60 * 5,
                 max_retries=1,
             )
-        else:
-            api_key = os.getenv("ANTHROPIC_API_KEY")
+        else: 
             self.client = anthropic.Anthropic(
-                api_key=api_key, max_retries=1, timeout=60 * 5
+                api_key=llm_config.api_key.get_secret_value() if llm_config.api_key else None,
+                max_retries=1,
+                timeout=60 * 5,
             )
-            model_name = model_name.replace(
+            self.model_name = self.model_name.replace(
                 "@", "-"
             )  # Quick fix for Anthropic Vertex API
-        self.model_name = model_name
-        self.max_retries = max_retries
-        self.use_caching = use_caching
-        self.prompt_caching_headers = {"anthropic-beta": "prompt-caching-2024-07-31"}
-        self.thinking_tokens = thinking_tokens
+        self.max_retries = llm_config.max_retries
+        if "claude-opus-4" in self.model_name or "claude-sonnet-4" in self.model_name: #Use Interleaved Thinking for Sonnet 4 and Opus 4
+            self.headers = {"anthropic-beta": "interleaved-thinking-2025-05-14"}
+        else:
+            self.headers = None
+        self.thinking_tokens = llm_config.thinking_tokens
 
     def generate(
         self,
@@ -117,7 +112,9 @@ class AnthropicDirectClient(LLMClient):
         # Turn GeneralContentBlock into Anthropic message format
         anthropic_messages = []
         for idx, message_list in enumerate(messages):
-            role = "user" if idx % 2 == 0 else "assistant"
+            role = (
+                "user" if isinstance(message_list[0], UserContentBlock) else "assistant"
+            )
             message_content_list = []
             for message in message_list:
                 # Check string type to avoid import issues particularly with reloads.
@@ -170,7 +167,7 @@ class AnthropicDirectClient(LLMClient):
                 message_content_list.append(message_content)
 
             # Anthropic supports up to 4 cache breakpoints, so we put them on the last 4 messages.
-            if self.use_caching and idx >= len(messages) - 4:
+            if idx >= len(messages) - 4:
                 if isinstance(message_content_list[-1], dict):
                     message_content_list[-1]["cache_control"] = {"type": "ephemeral"}
                 else:
@@ -182,11 +179,6 @@ class AnthropicDirectClient(LLMClient):
                     "content": message_content_list,
                 }
             )
-
-        if self.use_caching:
-            extra_headers = self.prompt_caching_headers
-        else:
-            extra_headers = None
 
         # Turn tool_choice into Anthropic tool_choice format
         if tool_choice is None:
@@ -223,9 +215,6 @@ class AnthropicDirectClient(LLMClient):
                 "thinking": {"type": "enabled", "budget_tokens": thinking_tokens}
             }
             temperature = 1
-            assert max_tokens >= 32_000 and thinking_tokens <= 8192, (
-                f"As a heuristic, max tokens {max_tokens} must be >= 32k and thinking tokens {thinking_tokens} must be < 8k"
-            )
         else:
             extra_body = None
 
@@ -239,7 +228,7 @@ class AnthropicDirectClient(LLMClient):
                     system=system_prompt or Anthropic_NOT_GIVEN,
                     tool_choice=tool_choice_param,  # type: ignore
                     tools=tool_params,
-                    extra_headers=extra_headers,
+                    extra_headers=self.headers,
                     extra_body=extra_body,
                 )
                 break
